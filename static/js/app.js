@@ -324,7 +324,11 @@ async function checkHealth() {
     const data = await response.json();
     serviceStatus = data.status;
     updateStatus();
-    if (data.status === 'ok') updateFootnote(data);
+    if (data.status === 'ok') {
+      updateFootnote(data);
+    } else if (data.status === 'initializing') {
+      setTimeout(checkHealth, 3000);
+    }
   } catch {
     serviceStatus = 'unhealthy';
     updateStatus();

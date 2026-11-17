@@ -23,7 +23,9 @@ router = APIRouter()
 def index():
     if not INDEX_FILE.exists():
         raise HTTPException(status_code=404, detail="前端页面缺失，请检查 static/index.html")
-    return FileResponse(INDEX_FILE)
+    return FileResponse(
+        INDEX_FILE, headers={"Cache-Control": "no-cache, must-revalidate"}
+    )
 
 
 @router.get("/health", response_model=HealthResponse, response_model_exclude_none=True, tags=["system"])

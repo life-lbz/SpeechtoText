@@ -24,6 +24,15 @@ logger = logging.getLogger(__name__)
 TRANSCRIBE_PATH = "/api/transcribe"
 
 
+class NoCacheStaticFiles(StaticFiles):
+    """静态资源禁用强缓存，避免前端更新后浏览器仍使用旧文件。"""
+
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
+        return response
+
+
 class BodySizeLimitMiddleware:
     """限制识别请求体大小，覆盖分块传输。"""
 
@@ -112,7 +121,7 @@ def create_app() -> FastAPI:
     app.include_router(router)
 
     if STATIC_DIR.exists():
-        app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+        app.mount("/static", NoCacheStaticFiles(directory=STATIC_DIR), name="static")
 
     return app
 
