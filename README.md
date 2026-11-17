@@ -22,6 +22,12 @@ python -m pip install -r requirements-funasr.txt
 
 仅部署 Whisper 时可使用 `requirements.txt`。
 
+NVIDIA GPU 加速需要额外安装 CUDA 12 运行时（未安装时自动使用 CPU，不影响启动）：
+
+```powershell
+python -m pip install nvidia-cublas-cu12 nvidia-cudnn-cu12
+```
+
 ## 启动
 
 ```powershell

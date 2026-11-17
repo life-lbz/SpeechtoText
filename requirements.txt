@@ -1,8 +1,9 @@
-fastapi>=0.115,<1.0
-uvicorn>=0.30,<1.0
-python-multipart>=0.0.9
-faster-whisper>=1.1.0
+fastapi>=0.163,<1.0
+uvicorn>=0.54,<1.0
+python-multipart>=0.0.34
+faster-whisper>=1.2.1
 opencc-python-reimplemented==0.1.7
+# funasr-onnx 声明 numpy<=1.26.4，实测 2.x 可正常运行
 numpy>=1.26
-pytest>=8.0
-httpx>=0.27
+pytest>=9.2
+httpx>=0.28

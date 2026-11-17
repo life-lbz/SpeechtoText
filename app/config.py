@@ -1,10 +1,42 @@
 """应用级配置。所有可调参数集中在此，便于测试与环境切换。"""
 
 import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+
+def _register_cuda_dlls() -> None:
+    """Windows 下把 pip 安装的 NVIDIA 运行时 DLL 加入搜索路径。
+
+    ctranslate2 通过 LoadLibrary 加载 cuBLAS / cuDNN，默认找不到
+    nvidia-*-cu12 放在 site-packages 里的二进制目录，需要显式注册。
+    """
+    if os.name != "nt":
+        return
+    nvidia_dir = Path(sys.prefix) / "Lib" / "site-packages" / "nvidia"
+    if not nvidia_dir.is_dir():
+        return
+    handles = []
+    paths = []
+    for component in sorted(nvidia_dir.iterdir()):
+        bin_dir = component / "bin"
+        if not bin_dir.is_dir():
+            continue
+        paths.append(str(bin_dir))
+        try:
+            handles.append(os.add_dll_directory(str(bin_dir)))
+        except OSError:
+            pass
+    if paths:
+        os.environ["PATH"] = os.pathsep.join(paths + [os.environ.get("PATH", "")])
+        _DLL_HANDLES.extend(handles)
+
+
+_DLL_HANDLES: list = []
+_register_cuda_dlls()
 STATIC_DIR = BASE_DIR / "static"
 INDEX_FILE = STATIC_DIR / "index.html"
 MODELS_DIR = BASE_DIR / "models"

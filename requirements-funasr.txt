@@ -1,2 +1,6 @@
 -r requirements.txt
+# 含中文 Paraformer 推理；PyPI 最新版即 0.4.11
 funasr-onnx==0.4.11
+# GPU 加速（可选，未安装时自动使用 CPU）
+# nvidia-cublas-cu12
+# nvidia-cudnn-cu12
