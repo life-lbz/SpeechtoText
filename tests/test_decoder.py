@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 
 from app.services.audio_utils import audio_duration
-from app.services.decoder import AudioDecodeError, decode_audio
+from app.services.decoder import AudioDecodeError, AudioTooLongError, decode_audio
 from tests.helpers import make_wav_bytes
 
 
@@ -56,3 +56,24 @@ def test_decode_corrupt_file_raises(tmp_path):
 def test_audio_duration_rejects_empty_array():
     with pytest.raises(ValueError):
         audio_duration(np.array([], dtype=np.float32))
+
+
+def test_webm_rejects_audio_beyond_limit(tmp_path):
+    import av
+
+    path = tmp_path / "tone.webm"
+    with av.open(str(path), "w") as container:
+        stream = container.add_stream("libopus", rate=48000)
+        stream.layout = "mono"
+        for index in range(75):
+            frame = av.AudioFrame.from_ndarray(
+                np.zeros((1, 960), dtype=np.int16), format="s16", layout="mono"
+            )
+            frame.sample_rate = 48000
+            frame.pts = index * 960
+            container.mux(stream.encode(frame))
+        container.mux(stream.encode())
+
+    assert abs(audio_duration(decode_audio(path, max_seconds=2)) - 1.5) < 0.02
+    with pytest.raises(AudioTooLongError):
+        decode_audio(path, max_seconds=1)

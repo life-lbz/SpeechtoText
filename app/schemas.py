@@ -12,4 +12,3 @@ class TranscriptionResponse(BaseModel):
 
 class HealthResponse(BaseModel):
     status: str
-    model_ready: bool

@@ -8,3 +8,4 @@ env/
 .DS_Store
 .screenshots/
 产物/
+.trae-html-share-packages/

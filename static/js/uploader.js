@@ -52,7 +52,7 @@ export async function transcribeAudio(blob, filename, language) {
   if (!response.ok) {
     const detail = payload?.detail;
     let message = STATUS_MESSAGES[response.status] || '识别失败，请重试';
-    if (response.status === 400 && typeof detail === 'string' && detail) {
+    if ([400, 503].includes(response.status) && typeof detail === 'string' && detail) {
       message = detail;
     }
     throw new TranscriptionRequestError(message, response.status);

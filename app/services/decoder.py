@@ -12,29 +12,37 @@ class AudioDecodeError(Exception):
     """音频无法解码或内容为空。"""
 
 
-def decode_audio(path: str | Path, target_sr: int | None = None) -> np.ndarray:
+class AudioTooLongError(AudioDecodeError):
+    """音频超过允许的时长。"""
+
+
+def decode_audio(
+    path: str | Path, target_sr: int | None = None, *, max_seconds: float | None = None
+) -> np.ndarray:
     """解码任意支持的音频文件为 float32 波形（取值范围 -1.0 ~ 1.0）。"""
     target_sr = target_sr or settings.target_sample_rate
     path = Path(path)
 
     if path.suffix.lower() == ".wav":
         try:
-            return _decode_wav(path, target_sr)
+            return _decode_wav(path, target_sr, max_seconds)
         except AudioDecodeError:
             raise
         except Exception:
             # 部分 WAV 使用非 PCM 编码，交由 av 兜底
             pass
 
-    return _decode_with_av(path, target_sr)
+    return _decode_with_av(path, target_sr, max_seconds)
 
 
-def _decode_wav(path: Path, target_sr: int) -> np.ndarray:
+def _decode_wav(path: Path, target_sr: int, max_seconds: float | None) -> np.ndarray:
     with wave.open(str(path), "rb") as reader:
         channels = reader.getnchannels()
         sample_width = reader.getsampwidth()
         frame_rate = reader.getframerate()
         compression = reader.getcomptype()
+        if max_seconds is not None and reader.getnframes() > int(frame_rate * max_seconds):
+            raise AudioTooLongError
         frames = reader.readframes(reader.getnframes())
 
     if compression != "NONE":
@@ -61,13 +69,23 @@ def _decode_wav(path: Path, target_sr: int) -> np.ndarray:
     return _resample(data, frame_rate, target_sr)
 
 
-def _decode_with_av(path: Path, target_sr: int) -> np.ndarray:
+def _decode_with_av(path: Path, target_sr: int, max_seconds: float | None) -> np.ndarray:
     try:
         import av
     except ImportError as exc:  # pragma: no cover - 依赖缺失时的兜底
         raise AudioDecodeError("缺少音频解码组件 av") from exc
 
     chunks: list[np.ndarray] = []
+    max_samples = None if max_seconds is None else int(target_sr * max_seconds)
+    sample_count = 0
+
+    def append_frame(frame):
+        nonlocal sample_count
+        sample_count += frame.samples
+        if max_samples is not None and sample_count > max_samples:
+            raise AudioTooLongError
+        chunks.append(frame.to_ndarray().reshape(-1))
+
     try:
         with av.open(str(path)) as container:
             stream = next(
@@ -79,9 +97,9 @@ def _decode_with_av(path: Path, target_sr: int) -> np.ndarray:
             resampler = av.AudioResampler(format="s16", layout="mono", rate=target_sr)
             for frame in container.decode(stream):
                 for resampled in resampler.resample(frame):
-                    chunks.append(resampled.to_ndarray().reshape(-1))
+                    append_frame(resampled)
             for resampled in resampler.resample(None):
-                chunks.append(resampled.to_ndarray().reshape(-1))
+                append_frame(resampled)
     except AudioDecodeError:
         raise
     except Exception as exc:

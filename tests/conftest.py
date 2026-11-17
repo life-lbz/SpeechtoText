@@ -1,7 +1,7 @@
 import os
 
 # 测试不加载真实模型（必须在导入 app 之前设置）
-os.environ.setdefault("ASR_PRELOAD", "0")
+os.environ["ASR_PRELOAD"] = "0"
 
 import pytest
 from fastapi.testclient import TestClient

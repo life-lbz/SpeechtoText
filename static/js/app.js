@@ -32,10 +32,11 @@ const state = {
   language: 'zh',
   busy: false,
   recording: false,
+  requestingMicrophone: false,
   selectedFile: null,
 };
 
-const service = { ready: false, loading: true };
+let serviceStatus = 'initializing';
 const toast = new Toast($('toastStack'));
 const renderer = new ResultRenderer(els);
 
@@ -49,19 +50,26 @@ function setBadge(kind, text) {
 function updateStatus() {
   if (state.busy) return setBadge('busy', '识别中');
   if (state.recording) return setBadge('busy', '录音中');
-  if (service.loading) return setBadge('loading', '模型加载中');
-  if (!service.ready) return setBadge('error', '模型不可用');
+  if (state.requestingMicrophone) return setBadge('loading', '等待麦克风授权');
+  if (serviceStatus === 'initializing') return setBadge('loading', '模型加载中');
+  if (serviceStatus === 'standby') return setBadge('loading', '模型将在首次识别时加载');
+  if (serviceStatus !== 'ok') return setBadge('error', '模型不可用');
   return setBadge('ready', '服务就绪');
 }
 
+function inputLocked() {
+  return state.busy || state.recording || state.requestingMicrophone;
+}
+
 function refreshControls() {
-  els.recordBtn.disabled = state.busy;
-  els.uploadBtn.disabled = state.busy || !state.selectedFile;
-  els.clearFileBtn.disabled = state.busy;
+  const locked = inputLocked();
+  els.recordBtn.disabled = state.busy || state.requestingMicrophone;
+  els.uploadBtn.disabled = locked || !state.selectedFile;
+  els.clearFileBtn.disabled = locked;
+  els.fileInput.disabled = locked;
   document.querySelectorAll('.lang-btn').forEach((btn) => {
-    btn.disabled = state.busy || state.recording;
+    btn.disabled = locked;
   });
-  els.dropzone.style.pointerEvents = state.busy ? 'none' : '';
 }
 
 function setRecordingUI(active) {
@@ -98,6 +106,7 @@ async function recognize(blob, filename) {
     toast.show(error?.message || '识别失败，请重试', 'error', 6000);
   } finally {
     setBusy(false);
+    if (serviceStatus !== 'ok') checkHealth();
   }
 }
 
@@ -114,6 +123,11 @@ const recorder = new MicrophoneRecorder({
   onLimit: () => {
     toast.show('录音已达 60 秒上限，已自动停止', 'warn', 5000);
   },
+  onError: (error) => {
+    setRecordingUI(false);
+    els.timer.textContent = formatClock(0);
+    toast.show(error?.message || '录音中断，请检查麦克风后重试', 'error', 6000);
+  },
   onStop: (blob, type) => {
     setRecordingUI(false);
     els.timer.textContent = formatClock(0);
@@ -126,11 +140,14 @@ const recorder = new MicrophoneRecorder({
 });
 
 els.recordBtn.addEventListener('click', async () => {
-  if (state.busy) return;
+  if (state.busy || state.requestingMicrophone) return;
   if (state.recording) {
     recorder.stop();
     return;
   }
+  state.requestingMicrophone = true;
+  updateStatus();
+  refreshControls();
   try {
     await recorder.start();
     setRecordingUI(true);
@@ -142,6 +159,10 @@ els.recordBtn.addEventListener('click', async () => {
       NotReadableError: '麦克风被其他程序占用，请关闭后重试',
     };
     toast.show(messages[error?.name] || error?.message || '无法启动录音', 'error', 6000);
+  } finally {
+    state.requestingMicrophone = false;
+    updateStatus();
+    refreshControls();
   }
 });
 
@@ -171,13 +192,14 @@ function clearSelectedFile() {
 
 // dropzone 是 label，点击会原生触发 fileInput；这里只补充键盘访问
 els.dropzone.addEventListener('keydown', (event) => {
-  if ((event.key === 'Enter' || event.key === ' ') && !state.busy) {
+  if ((event.key === 'Enter' || event.key === ' ') && !inputLocked()) {
     event.preventDefault();
     els.fileInput.click();
   }
 });
 
 els.fileInput.addEventListener('change', (event) => {
+  if (inputLocked()) return;
   const file = event.target.files?.[0];
   if (file) setSelectedFile(file);
 });
@@ -185,7 +207,7 @@ els.fileInput.addEventListener('change', (event) => {
 ['dragenter', 'dragover'].forEach((name) => {
   els.dropzone.addEventListener(name, (event) => {
     event.preventDefault();
-    els.dropzone.classList.add('is-dragover');
+    if (!inputLocked()) els.dropzone.classList.add('is-dragover');
   });
 });
 
@@ -197,7 +219,7 @@ els.fileInput.addEventListener('change', (event) => {
 });
 
 els.dropzone.addEventListener('drop', (event) => {
-  if (state.busy) return;
+  if (inputLocked()) return;
   const file = event.dataTransfer?.files?.[0];
   if (file) setSelectedFile(file);
 });
@@ -205,7 +227,7 @@ els.dropzone.addEventListener('drop', (event) => {
 els.clearFileBtn.addEventListener('click', clearSelectedFile);
 
 els.uploadBtn.addEventListener('click', () => {
-  if (!state.selectedFile || state.busy) return;
+  if (!state.selectedFile || inputLocked()) return;
   recognize(state.selectedFile, state.selectedFile.name);
 });
 
@@ -241,15 +263,10 @@ async function checkHealth() {
   try {
     const response = await fetch('/health', { cache: 'no-store' });
     const data = await response.json();
-    service.ready = Boolean(data.model_ready);
-    service.loading = data.status === 'initializing';
+    serviceStatus = data.status;
     updateStatus();
-    if (!service.ready && service.loading) {
-      window.setTimeout(checkHealth, 2000);
-    }
   } catch {
-    service.ready = false;
-    service.loading = false;
+    serviceStatus = 'unhealthy';
     updateStatus();
     toast.show('无法连接后端服务，请确认 uvicorn 已启动', 'error', 6000);
   }

@@ -14,11 +14,8 @@
 ## 安装
 
 ```powershell
-# 1. 创建并激活虚拟环境（可选，但推荐）
-conda create -n speech_to_text python=3.12 -y
-conda activate speech_to_text
-
-# 2. 安装依赖
+# 确认当前 Python 为 3.12
+python --version
 python -m pip install -r requirements.txt
 ```
 
@@ -30,13 +27,15 @@ python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 
 浏览器打开 <http://127.0.0.1:8000> 即可使用。
 
-- 首次启动会自动从 HuggingFace 下载 `faster-whisper base` 模型（约 150MB），加载完成后 `/health` 返回 `ok`。
-- 模型缓存位于 `~/.cache/huggingface/hub`，之后启动无需联网，可完全断网运行。
-- 国内网络如下载受阻，可先设置镜像：
+- 首次启动会自动从 Hugging Face 下载 `faster-whisper base`。访问 `http://127.0.0.1:8000/health`，收到 `{"status":"ok"}` 即表示模型已可用。
+- 模型默认缓存在 `~/.cache/huggingface/hub`。首次下载成功后，可以停止服务，在同一个 PowerShell 中执行以下命令，从现有缓存重新启动。
 
 ```powershell
-$env:HF_ENDPOINT = "https://hf-mirror.com"
+$env:HF_HUB_OFFLINE = "1"
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
+
+缓存缺失时，清除当前 PowerShell 的离线设置 `Remove-Item Env:HF_HUB_OFFLINE`，恢复网络并重启服务。
 
 ## 使用方式
 
@@ -48,7 +47,7 @@ $env:HF_ENDPOINT = "https://hf-mirror.com"
 
 | Method | Endpoint | 说明 |
 |---|---|---|
-| GET | `/health` | 健康检查：`{"status": "ok", "model_ready": true}` |
+| GET | `/health` | 模型已就绪时返回 `{"status":"ok"}`，懒加载模式下未加载时为 `standby`，加载失败时为 `unhealthy` |
 | GET | `/` | Web 前端页面 |
 | POST | `/api/transcribe` | 音频识别（multipart/form-data） |
 | GET | `/docs` | 自动生成的接口文档 |
@@ -58,6 +57,8 @@ $env:HF_ENDPOINT = "https://hf-mirror.com"
 ```powershell
 curl.exe -X POST http://127.0.0.1:8000/api/transcribe `
   -F "file=@samples/chinese.wav" -F "language=zh"
+curl.exe -X POST http://127.0.0.1:8000/api/transcribe `
+  -F "file=@samples/english.wav" -F "language=en"
 ```
 
 响应：
@@ -71,7 +72,7 @@ curl.exe -X POST http://127.0.0.1:8000/api/transcribe `
 }
 ```
 
-错误码：`400` 格式不支持 / 文件为空或损坏 / 时长超 60 秒，`413` 文件超过 10MB，`422` 语言参数非法，`500` 推理异常，`503` 模型未就绪。
+错误码：`400` 格式不支持、文件为空或损坏、音频过长，`413` 文件超过 10 MB，`422` 语言参数非法，`500` 推理异常，`503` 模型不可用。后端允许 0.5 秒录音收尾偏差。处理耗时涵盖音频校验、解码和推理，排除首次加载模型的时间。
 
 ## 测试
 
@@ -79,7 +80,16 @@ curl.exe -X POST http://127.0.0.1:8000/api/transcribe `
 python -m pytest -q
 ```
 
-测试默认使用 Mock 模型（不加载权重、不联网），覆盖校验器、解码器、推理重试与 API 全链路；真实模型效果可用 `samples/` 下的中英文音频手动验证。
+常规 pytest 测试使用 Mock 模型，同时执行实际 WAV 和 WebM 解码。真实模型可以用上述两条上传命令验证，预期文本见 [samples/reference.txt](samples/reference.txt)。
+
+如需重复验收浏览器流程，先按默认配置启动真实模型服务并准备本机 Chrome，再在另一个终端运行以下可选脚本。它会用仓库音频模拟麦克风，并测试上传、录音、剪贴板和拒绝权限。带上 `--record-limit` 会额外录满 60 秒。
+
+```powershell
+python -m pip install playwright
+python -X utf8 -m tests.verify_browser --record-limit
+```
+
+人工验收清单和实测结果见 [测试报告](docs/test-report.md)。
 
 ## 配置
 
@@ -90,7 +100,7 @@ python -m pytest -q
 | `ASR_MODEL_SIZE` | `base` | 模型规格：tiny / base / small |
 | `ASR_DEVICE` | `cpu` | 推理设备 |
 | `ASR_COMPUTE_TYPE` | `int8` | 量化精度 |
-| `ASR_PRELOAD` | `1` | 启动时预加载模型，`0` 为懒加载 |
+| `ASR_PRELOAD` | `1` | `1` 在启动时加载，`0` 在首次有效识别请求时加载，加载失败后可重新提交请求 |
 
 ## 目录结构
 
@@ -110,6 +120,7 @@ SpeechtoText/
 ├── static/                  # 原生前端（HTML/CSS/JS）
 ├── tests/                   # pytest 用例（Mock 模型）
 ├── samples/                 # 中英文样例音频与参考文本
+├── docs/                    # 考核需求、设计、测试结果和开发记录
 ├── requirements.txt
 └── pytest.ini
 ```

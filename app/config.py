@@ -27,6 +27,7 @@ class Settings:
     # 上传约束
     max_file_size: int = 10 * 1024 * 1024  # 10MB
     max_duration_seconds: float = 60.0
+    recording_tolerance_seconds: float = 0.5  # 容纳浏览器停止录音和编码的少量偏差
     temp_max_age_seconds: int = 300
 
     # 音频参数

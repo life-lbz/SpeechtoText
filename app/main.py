@@ -69,7 +69,7 @@ def create_app() -> FastAPI:
             logger.info("startup: 清理残留临时音频 %s 个", removed)
         if settings.preload_model:
             try:
-                transcriber.load()
+                app.state.transcriber.load()
             except Exception as exc:  # 加载失败不阻断启动，/health 反映状态
                 app.state.model_error = str(exc)
                 logger.critical("模型加载失败: %s", exc)

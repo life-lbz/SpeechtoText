@@ -75,20 +75,36 @@ def test_audio_longer_than_60_seconds_returns_400(client):
     assert "60" in response.json()["detail"]
 
 
-def test_model_not_ready_returns_503(client, fake_transcriber, sample_wav):
+def test_lazy_model_load_failure_returns_503_and_can_retry(
+    client, fake_transcriber, sample_wav, monkeypatch
+):
     fake_transcriber.ready = False
-    response = client.post(
-        "/api/transcribe",
-        files={"file": ("chinese.wav", sample_wav, "audio/wav")},
-        data={"language": "zh"},
-    )
+    load = fake_transcriber.load
+
+    def fail_load():
+        raise RuntimeError("model missing")
+
+    payload = {
+        "files": {"file": ("chinese.wav", sample_wav, "audio/wav")},
+        "data": {"language": "zh"},
+    }
+    monkeypatch.setattr(fake_transcriber, "load", fail_load)
+    response = client.post("/api/transcribe", **payload)
     assert response.status_code == 503
+    assert client.get("/health").json() == {"status": "unhealthy"}
+    assert not fake_transcriber.calls
+
+    monkeypatch.setattr(fake_transcriber, "load", load)
+    assert client.post("/api/transcribe", **payload).status_code == 200
+    assert client.get("/health").json() == {"status": "ok"}
 
 
-def test_corrupt_wav_returns_400(client):
+def test_corrupt_wav_returns_400_without_loading_model(client, fake_transcriber):
+    fake_transcriber.ready = False
     response = client.post(
         "/api/transcribe",
         files={"file": ("broken.wav", b"not-a-real-audio", "audio/wav")},
         data={"language": "zh"},
     )
     assert response.status_code == 400
+    assert not fake_transcriber.ready

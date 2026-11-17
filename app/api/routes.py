@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse
 from app.config import INDEX_FILE, settings
 from app.schemas import HealthResponse, TranscriptionResponse
 from app.services.audio_utils import audio_duration
-from app.services.decoder import AudioDecodeError, decode_audio
+from app.services.decoder import AudioDecodeError, AudioTooLongError, decode_audio
 from app.services.tempfiles import temporary_audio_file
 from app.services.transcriber import ModelNotReadyError, TranscriptionError
 from app.services.validator import AudioValidationError, validate_upload
@@ -31,10 +31,10 @@ def index():
 def health(request: Request):
     transcriber = request.app.state.transcriber
     if transcriber.ready:
-        return HealthResponse(status="ok", model_ready=True)
+        return HealthResponse(status="ok")
     if request.app.state.model_error:
-        return HealthResponse(status="unhealthy", model_ready=False)
-    return HealthResponse(status="initializing", model_ready=False)
+        return HealthResponse(status="unhealthy")
+    return HealthResponse(status="initializing" if settings.preload_model else "standby")
 
 
 @router.post(
@@ -72,31 +72,46 @@ async def transcribe(
         raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
 
     transcriber = request.app.state.transcriber
-    if not transcriber.ready:
-        raise HTTPException(status_code=503, detail="ASR model not available")
+    if settings.preload_model and not transcriber.ready:
+        raise HTTPException(status_code=503, detail="语音识别模型不可用，请检查服务日志。")
 
+    model_load_seconds = 0.0
     try:
         with temporary_audio_file(content, suffix) as audio_path:
-            audio = await run_in_threadpool(decode_audio, audio_path)
+            audio = await run_in_threadpool(
+                decode_audio,
+                audio_path,
+                max_seconds=settings.max_duration_seconds + settings.recording_tolerance_seconds,
+            )
             duration = audio_duration(audio, settings.target_sample_rate)
-            if duration > settings.max_duration_seconds + 0.5:
+        if not transcriber.ready:
+            load_started = time.perf_counter()
+            try:
+                await run_in_threadpool(transcriber.load)
+            except Exception as exc:
+                request.app.state.model_error = str(exc)
+                logger.exception("[trace_id=%s] 模型加载失败", trace_id)
                 raise HTTPException(
-                    status_code=400,
-                    detail=f"音频时长 {duration:.1f} 秒超过 60 秒上限，请分段识别。",
-                )
-            text = await run_in_threadpool(transcriber.transcribe, audio, language)
-    except HTTPException:
-        raise
+                    status_code=503, detail="语音识别模型加载失败，请检查模型缓存后重试。"
+                ) from exc
+            model_load_seconds = time.perf_counter() - load_started
+            request.app.state.model_error = None
+        text = await run_in_threadpool(transcriber.transcribe, audio, language)
+    except AudioTooLongError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"音频超过 {settings.max_duration_seconds:g} 秒上限，请分段识别。",
+        ) from exc
     except AudioDecodeError as exc:
         logger.warning("[trace_id=%s] 解码失败: %s", trace_id, exc)
         raise HTTPException(status_code=400, detail="音频文件为空或已损坏，请重新上传。") from exc
     except ModelNotReadyError as exc:
-        raise HTTPException(status_code=503, detail="ASR model not available") from exc
+        raise HTTPException(status_code=503, detail="语音识别模型不可用，请检查服务日志。") from exc
     except TranscriptionError as exc:
         logger.error("[trace_id=%s] 推理失败: %s", trace_id, exc)
         raise HTTPException(status_code=500, detail="识别失败，请重试。") from exc
 
-    processing = round(time.perf_counter() - started, 2)
+    processing = round(time.perf_counter() - started - model_load_seconds, 2)
     text = text.strip()
     logger.info(
         "[trace_id=%s] 识别完成 duration=%.2fs processing=%.2fs text_len=%s",

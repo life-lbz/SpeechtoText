@@ -21,29 +21,26 @@ export function mimeToExtension(mimeType = '') {
  * 麦克风录音封装：开始 / 停止 / 计时 / 音量可视化 / 60 秒自动停止。
  */
 export class MicrophoneRecorder {
-  constructor({ maxSeconds = 60, onTick, onLevel, onStop, onLimit } = {}) {
+  constructor({ maxSeconds = 60, onTick, onLevel, onStop, onLimit, onError } = {}) {
     this.maxSeconds = maxSeconds;
     this.onTick = onTick;
     this.onLevel = onLevel;
     this.onStop = onStop;
     this.onLimit = onLimit;
+    this.onError = onError;
 
     this.recorder = null;
     this.stream = null;
     this.chunks = [];
     this.startedAt = 0;
     this.timerId = null;
+    this.limitTimerId = null;
     this.meterRaf = null;
     this.audioCtx = null;
     this.analyser = null;
   }
 
-  get isRecording() {
-    return this.recorder?.state === 'recording';
-  }
-
   async start() {
-    if (this.isRecording) return;
     if (!navigator.mediaDevices?.getUserMedia) {
       throw new Error('当前浏览器不支持录音，请使用 Chrome 或 Edge');
     }
@@ -52,36 +49,44 @@ export class MicrophoneRecorder {
       audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
     });
 
-    const mimeType = pickMimeType();
-    this.recorder = new MediaRecorder(
-      this.stream,
-      mimeType ? { mimeType } : undefined,
-    );
-    this.chunks = [];
-    this.startedAt = performance.now();
+    try {
+      const mimeType = pickMimeType();
+      const recorder = new MediaRecorder(this.stream, mimeType ? { mimeType } : undefined);
+      this.recorder = recorder;
 
-    this.recorder.ondataavailable = (event) => {
-      if (event.data && event.data.size > 0) this.chunks.push(event.data);
-    };
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) this.chunks.push(event.data);
+      };
+      recorder.onstop = () => {
+        const type = recorder.mimeType || mimeType || 'audio/webm';
+        const blob = new Blob(this.chunks, { type });
+        this._cleanup();
+        this.onStop?.(blob, type);
+      };
+      recorder.onerror = (event) => {
+        this._cleanup();
+        this.onError?.(event.error);
+      };
 
-    this.recorder.onstop = () => {
-      const type = this.recorder?.mimeType || mimeType || 'audio/webm';
-      const blob = new Blob(this.chunks, { type });
-      this.chunks = [];
-      this._stopTimer();
-      this._stopMeter();
-      this._releaseStream();
-      this.onStop?.(blob, type);
-    };
-
-    this.recorder.start(250);
-    this._startTimer();
-    this._startMeter();
+      this.startedAt = performance.now();
+      recorder.start(250);
+      this._startTimer();
+      this._startMeter();
+    } catch (error) {
+      this._cleanup();
+      throw error;
+    }
   }
 
   stop() {
     if (this.recorder && this.recorder.state !== 'inactive') {
-      this.recorder.stop();
+      this._stopTimer();
+      try {
+        this.recorder.stop();
+      } catch (error) {
+        this._cleanup();
+        this.onError?.(error);
+      }
     }
   }
 
@@ -90,12 +95,12 @@ export class MicrophoneRecorder {
     this.timerId = window.setInterval(() => {
       const elapsed = (performance.now() - this.startedAt) / 1000;
       this._emitTick(elapsed);
-      if (elapsed >= this.maxSeconds) {
-        this._stopTimer();
-        this.onLimit?.();
-        this.stop();
-      }
     }, 100);
+    this.limitTimerId = window.setTimeout(() => {
+      this._emitTick(this.maxSeconds);
+      this.onLimit?.();
+      this.stop();
+    }, this.maxSeconds * 1000);
   }
 
   _stopTimer() {
@@ -103,6 +108,21 @@ export class MicrophoneRecorder {
       window.clearInterval(this.timerId);
       this.timerId = null;
     }
+    window.clearTimeout(this.limitTimerId);
+    this.limitTimerId = null;
+  }
+
+  _cleanup() {
+    if (this.recorder) {
+      this.recorder.ondataavailable = null;
+      this.recorder.onstop = null;
+      this.recorder.onerror = null;
+      this.recorder = null;
+    }
+    this.chunks = [];
+    this._stopTimer();
+    this._stopMeter();
+    this._releaseStream();
   }
 
   _emitTick(elapsed) {
