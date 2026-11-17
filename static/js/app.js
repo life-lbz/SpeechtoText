@@ -324,11 +324,21 @@ async function checkHealth() {
     const data = await response.json();
     serviceStatus = data.status;
     updateStatus();
+    if (data.status === 'ok') updateFootnote(data);
   } catch {
     serviceStatus = 'unhealthy';
     updateStatus();
     toast.show('无法连接后端服务，请确认 uvicorn 已启动', 'error', 6000);
   }
+}
+
+function updateFootnote(data) {
+  const footer = document.getElementById('footnote');
+  if (!footer) return;
+  const engine = data.device === 'cuda'
+    ? `faster-whisper ${data.model} · CUDA 加速`
+    : 'FunASR Paraformer（中文）+ faster-whisper（英文）· CPU INT8';
+  footer.textContent = `FastAPI · ${engine} · 模型加载完成后可断网运行`;
 }
 
 refreshControls();
