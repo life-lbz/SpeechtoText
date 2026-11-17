@@ -1,0 +1,2 @@
+中文（chinese.wav）：你好，欢迎使用本地语音识别系统。
+英文（english.wav）：Hello and welcome to the local speech to text system.

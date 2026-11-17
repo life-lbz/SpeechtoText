@@ -1,0 +1,107 @@
+"""音频解码：统一转换为 16kHz 单声道 float32 numpy 数组。"""
+
+import wave
+from pathlib import Path
+
+import numpy as np
+
+from app.config import settings
+
+
+class AudioDecodeError(Exception):
+    """音频无法解码或内容为空。"""
+
+
+def decode_audio(path: str | Path, target_sr: int | None = None) -> np.ndarray:
+    """解码任意支持的音频文件为 float32 波形（取值范围 -1.0 ~ 1.0）。"""
+    target_sr = target_sr or settings.target_sample_rate
+    path = Path(path)
+
+    if path.suffix.lower() == ".wav":
+        try:
+            return _decode_wav(path, target_sr)
+        except AudioDecodeError:
+            raise
+        except Exception:
+            # 部分 WAV 使用非 PCM 编码，交由 av 兜底
+            pass
+
+    return _decode_with_av(path, target_sr)
+
+
+def _decode_wav(path: Path, target_sr: int) -> np.ndarray:
+    with wave.open(str(path), "rb") as reader:
+        channels = reader.getnchannels()
+        sample_width = reader.getsampwidth()
+        frame_rate = reader.getframerate()
+        compression = reader.getcomptype()
+        frames = reader.readframes(reader.getnframes())
+
+    if compression != "NONE":
+        raise AudioDecodeError("不支持的 WAV 编码")
+    if not frames:
+        raise AudioDecodeError("音频文件为空")
+
+    if sample_width == 1:
+        data = (np.frombuffer(frames, dtype=np.uint8).astype(np.float32) - 128.0) / 128.0
+    elif sample_width == 2:
+        data = np.frombuffer(frames, dtype="<i2").astype(np.float32) / 32768.0
+    elif sample_width == 3:
+        raw = np.frombuffer(frames, dtype=np.uint8).reshape(-1, 3).astype(np.int32)
+        values = raw[:, 0] | (raw[:, 1] << 8) | (raw[:, 2] << 16)
+        values = np.where(values >= 1 << 23, values - (1 << 24), values)
+        data = values.astype(np.float32) / float(1 << 23)
+    elif sample_width == 4:
+        data = np.frombuffer(frames, dtype="<i4").astype(np.float32) / 2147483648.0
+    else:
+        raise AudioDecodeError("不支持的 WAV 位深")
+
+    if channels > 1:
+        data = data.reshape(-1, channels).mean(axis=1)
+    return _resample(data, frame_rate, target_sr)
+
+
+def _decode_with_av(path: Path, target_sr: int) -> np.ndarray:
+    try:
+        import av
+    except ImportError as exc:  # pragma: no cover - 依赖缺失时的兜底
+        raise AudioDecodeError("缺少音频解码组件 av") from exc
+
+    chunks: list[np.ndarray] = []
+    try:
+        with av.open(str(path)) as container:
+            stream = next(
+                (item for item in container.streams if item.type == "audio"), None
+            )
+            if stream is None:
+                raise AudioDecodeError("文件中未检测到音频轨道")
+            stream.thread_type = "AUTO"
+            resampler = av.AudioResampler(format="s16", layout="mono", rate=target_sr)
+            for frame in container.decode(stream):
+                for resampled in resampler.resample(frame):
+                    chunks.append(resampled.to_ndarray().reshape(-1))
+            for resampled in resampler.resample(None):
+                chunks.append(resampled.to_ndarray().reshape(-1))
+    except AudioDecodeError:
+        raise
+    except Exception as exc:
+        raise AudioDecodeError(f"音频解码失败：{exc}") from exc
+
+    if not chunks:
+        raise AudioDecodeError("音频文件为空或已损坏")
+    samples = np.concatenate(chunks).astype(np.float32) / 32768.0
+    return samples
+
+
+def _resample(data: np.ndarray, source_sr: int, target_sr: int) -> np.ndarray:
+    """线性插值重采样，避免引入 scipy 依赖。"""
+    data = np.asarray(data, dtype=np.float32)
+    if data.size == 0:
+        raise AudioDecodeError("音频文件为空")
+    if source_sr == target_sr:
+        return data
+
+    target_length = max(1, int(round(data.size * target_sr / source_sr)))
+    source_index = np.arange(data.size, dtype=np.float64)
+    target_index = np.linspace(0, data.size - 1, target_length)
+    return np.interp(target_index, source_index, data).astype(np.float32)
