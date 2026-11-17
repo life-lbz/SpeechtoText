@@ -1,0 +1,2 @@
+-r requirements.txt
+funasr-onnx==0.4.11

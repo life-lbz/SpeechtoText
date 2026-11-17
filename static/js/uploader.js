@@ -30,14 +30,18 @@ export function validateFile(file) {
 }
 
 /** 上传音频并等待识别结果。 */
-export async function transcribeAudio(blob, filename, language) {
+export async function transcribeAudio(
+  blob, filename, language, { signal, preview = false, recording = false } = {},
+) {
   const form = new FormData();
   form.append('file', blob, filename);
   form.append('language', language);
+  if (preview) form.append('preview', 'true');
+  if (recording) form.append('recording', 'true');
 
   let response;
   try {
-    response = await fetch('/api/transcribe', { method: 'POST', body: form });
+    response = await fetch('/api/transcribe', { method: 'POST', body: form, signal });
   } catch {
     throw new TranscriptionRequestError('无法连接到识别服务，请确认后端已启动');
   }

@@ -2,16 +2,17 @@
 
 import logging
 import os
+from asyncio import Semaphore
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.formparsers import MultiPartException
 
 from app.api.routes import router
 from app.config import STATIC_DIR, settings
-from app.services.tempfiles import cleanup_stale_files
 from app.services.transcriber import Transcriber
 
 logging.basicConfig(
@@ -24,7 +25,7 @@ TRANSCRIBE_PATH = "/api/transcribe"
 
 
 class BodySizeLimitMiddleware:
-    """在读取请求体之前按 Content-Length 拦截超限上传，避免大文件进入内存。"""
+    """限制识别请求体大小，覆盖分块传输。"""
 
     def __init__(self, app, max_body_size: int):
         self.app = app
@@ -35,20 +36,37 @@ class BodySizeLimitMiddleware:
             await self.app(scope, receive, send)
             return
 
-        content_length = dict(scope.get("headers") or []).get(b"content-length")
-        if content_length is not None:
-            try:
-                too_large = int(content_length) > self.max_body_size
-            except ValueError:
-                too_large = False
-            if too_large:
-                response = JSONResponse(
-                    status_code=413,
-                    content={"detail": "File too large. Maximum size is 10MB."},
-                )
+        response = JSONResponse(
+            status_code=413,
+            content={"detail": "File too large. Maximum size is 10MB."},
+        )
+        content_length = dict(scope.get("headers") or []).get(b"content-length", b"0")
+        try:
+            too_large = int(content_length) > self.max_body_size
+        except ValueError:
+            too_large = False
+        if too_large:
+            await response(scope, receive, send)
+            return
+
+        received = 0
+
+        async def limited_receive():
+            nonlocal received
+            message = await receive()
+            received += len(message.get("body", b""))
+            if received > self.max_body_size:
+                # 让 multipart 解析器关闭已打开的上传文件。
+                raise MultiPartException("Request body exceeds upload limit")
+            return message
+
+        async def limited_send(message):
+            if received <= self.max_body_size:
+                await send(message)
+            elif message["type"] == "http.response.start":
                 await response(scope, receive, send)
-                return
-        await self.app(scope, receive, send)
+
+        await self.app(scope, limited_receive, limited_send)
 
 
 def create_app() -> FastAPI:
@@ -64,9 +82,7 @@ def create_app() -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
-        removed = cleanup_stale_files(settings.temp_max_age_seconds)
-        if removed:
-            logger.info("startup: 清理残留临时音频 %s 个", removed)
+        app.state.transcription_slot = Semaphore(1)
         if settings.preload_model:
             try:
                 app.state.transcriber.load()

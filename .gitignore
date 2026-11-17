@@ -9,3 +9,6 @@ env/
 .screenshots/
 产物/
 .trae-html-share-packages/
+/models/*
+!/models/README.md
+!/models/SHA256SUMS.txt

@@ -42,6 +42,22 @@ export class ResultRenderer {
     els.clearBtn.disabled = false;
   }
 
+  renderPreview(text) {
+    const { els } = this;
+    els.resultPlaceholder.hidden = true;
+    els.resultText.hidden = false;
+    els.resultText.textContent = text;
+    els.copyBtn.disabled = false;
+  }
+
+  keepPreview() {
+    if (!this.els.resultText.textContent) {
+      this.clear();
+      return;
+    }
+    this.els.clearBtn.disabled = false;
+  }
+
   clear() {
     const { els } = this;
     els.resultText.hidden = true;
@@ -49,6 +65,9 @@ export class ResultRenderer {
     els.resultPlaceholder.hidden = false;
     els.resultPlaceholder.textContent = '识别出的文字会显示在这里';
     els.resultMeta.hidden = true;
+    els.metaLang.textContent = '--';
+    els.metaDuration.textContent = '--';
+    els.metaProcessing.textContent = '--';
     els.copyBtn.disabled = true;
     els.clearBtn.disabled = true;
   }

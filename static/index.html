@@ -5,7 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>本地语音识别 · Speech to Text</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%234f46e5'%3E%3Cpath d='M12 15a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3Z'/%3E%3Cpath d='M19 11a7 7 0 0 1-14 0M12 18v3' stroke='%234f46e5' stroke-width='2' stroke-linecap='round' fill='none'/%3E%3C/svg%3E">
-  <link rel="stylesheet" href="/static/css/style.css">
+  <link id="appStyles" rel="stylesheet" href="/static/css/style.css">
+  <script>
+    if (location.protocol === 'file:') {
+      document.getElementById('appStyles').href = './css/style.css';
+    }
+  </script>
 </head>
 <body>
   <div class="app">
@@ -46,7 +51,7 @@
       <section class="input-grid">
         <article class="card">
           <div class="card-head">
-            <h2>麦克风录音</h2>
+            <h2>实时语音识别</h2>
             <span class="tag">最长 60 秒</span>
           </div>
           <div class="recorder">
@@ -58,7 +63,7 @@
             </button>
             <div class="timer" id="timer">00:00</div>
             <div class="level-track" aria-hidden="true"><div class="level-fill" id="levelFill"></div></div>
-            <p class="card-tip" id="recordTip">点击麦克风开始录音，停止后自动识别</p>
+            <p class="card-tip" id="recordTip">点击麦克风，录音时下方会陆续显示文字</p>
           </div>
         </article>
 
@@ -118,6 +123,22 @@
   </div>
 
   <div class="toast-stack" id="toastStack" role="status" aria-live="polite"></div>
-  <script type="module" src="/static/js/app.js"></script>
+  <script>
+    if (location.protocol === 'file:') {
+      document.getElementById('statusText').textContent = '文件预览';
+      document.getElementById('statusBadge').dataset.state = 'error';
+      document.querySelectorAll('.lang-btn, #recordBtn, #fileInput, #clearFileBtn').forEach((control) => {
+        control.disabled = true;
+      });
+      document.getElementById('dropzone').removeAttribute('tabindex');
+
+      const serviceLink = document.createElement('a');
+      serviceLink.href = 'http://127.0.0.1:8000/';
+      serviceLink.textContent = '打开本地服务';
+      document.getElementById('recordTip').replaceChildren('请先启动服务，再', serviceLink, '使用识别功能。');
+    } else {
+      import('/static/js/app.js');
+    }
+  </script>
 </body>
 </html>

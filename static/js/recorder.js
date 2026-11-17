@@ -21,13 +21,17 @@ export function mimeToExtension(mimeType = '') {
  * 麦克风录音封装：开始 / 停止 / 计时 / 音量可视化 / 60 秒自动停止。
  */
 export class MicrophoneRecorder {
-  constructor({ maxSeconds = 60, onTick, onLevel, onStop, onLimit, onError } = {}) {
+  constructor({
+    maxSeconds = 60, onTick, onLevel, onStop, onLimit, onError, onChunk, onPreviewError,
+  } = {}) {
     this.maxSeconds = maxSeconds;
     this.onTick = onTick;
     this.onLevel = onLevel;
     this.onStop = onStop;
     this.onLimit = onLimit;
     this.onError = onError;
+    this.onChunk = onChunk;
+    this.onPreviewError = onPreviewError;
 
     this.recorder = null;
     this.stream = null;
@@ -38,6 +42,7 @@ export class MicrophoneRecorder {
     this.meterRaf = null;
     this.audioCtx = null;
     this.analyser = null;
+    this.previewNode = null;
   }
 
   async start() {
@@ -132,11 +137,16 @@ export class MicrophoneRecorder {
   _startMeter() {
     try {
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
-      if (!AudioCtx) return;
+      if (!AudioCtx) {
+        this.onPreviewError?.();
+        return;
+      }
       this.audioCtx = new AudioCtx();
       this.analyser = this.audioCtx.createAnalyser();
       this.analyser.fftSize = 512;
-      this.audioCtx.createMediaStreamSource(this.stream).connect(this.analyser);
+      const source = this.audioCtx.createMediaStreamSource(this.stream);
+      source.connect(this.analyser);
+      this._startPreviewCapture(this.audioCtx, source);
       const data = new Uint8Array(this.analyser.fftSize);
 
       const loop = () => {
@@ -155,6 +165,25 @@ export class MicrophoneRecorder {
     } catch {
       // 音量可视化失败不影响录音主流程
       this._stopMeter();
+      this.onPreviewError?.();
+    }
+  }
+
+  async _startPreviewCapture(context, source) {
+    try {
+      await context.audioWorklet.addModule(new URL('./preview-audio-worklet.js', import.meta.url));
+      if (this.audioCtx !== context) return;
+      const node = new AudioWorkletNode(context, 'preview-audio', { numberOfOutputs: 0 });
+      this.previewNode = node;
+      node.port.onmessage = ({ data }) => {
+        if (this.recorder?.state === 'recording') {
+          this.onChunk?.(new Blob([data], { type: 'audio/wav' }));
+        }
+      };
+      node.onprocessorerror = () => this.onPreviewError?.();
+      source.connect(node);
+    } catch {
+      if (this.audioCtx === context) this.onPreviewError?.();
     }
   }
 
@@ -164,6 +193,11 @@ export class MicrophoneRecorder {
       this.meterRaf = null;
     }
     this.analyser = null;
+    if (this.previewNode) {
+      this.previewNode.onprocessorerror = null;
+      this.previewNode.port.close();
+      this.previewNode = null;
+    }
     if (this.audioCtx) {
       this.audioCtx.close().catch(() => {});
       this.audioCtx = null;

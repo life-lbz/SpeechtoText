@@ -3,6 +3,8 @@ import { transcribeAudio, validateFile } from './uploader.js';
 import { ResultRenderer, Toast, formatClock, formatSize } from './display.js';
 
 const $ = (id) => document.getElementById(id);
+const RECORDING_TIP = '正在实时识别，再次点击生成最终结果';
+const PREVIEW_ERROR_TIP = '实时转写暂时不可用，停止后仍会尝试识别整段录音';
 
 const els = {
   statusBadge: $('statusBadge'),
@@ -37,6 +39,7 @@ const state = {
 };
 
 let serviceStatus = 'initializing';
+let preview = null;
 const toast = new Toast($('toastStack'));
 const renderer = new ResultRenderer(els);
 
@@ -77,8 +80,8 @@ function setRecordingUI(active) {
   els.recordBtn.classList.toggle('is-recording', active);
   els.recordBtn.setAttribute('aria-label', active ? '停止录音' : '开始录音');
   els.recordTip.textContent = active
-    ? '正在录音，再次点击停止并自动识别'
-    : '点击麦克风开始录音，停止后自动识别';
+    ? (preview?.captureFailed ? PREVIEW_ERROR_TIP : RECORDING_TIP)
+    : '点击麦克风，录音时下方会陆续显示文字';
   if (!active) els.levelFill.style.width = '0%';
   updateStatus();
   refreshControls();
@@ -92,10 +95,10 @@ function setBusy(busy) {
 
 /* ---------------- 识别主流程 ---------------- */
 
-async function recognize(blob, filename) {
+async function recognize(blob, filename, fromRecording = false) {
   setBusy(true);
   try {
-    const result = await transcribeAudio(blob, filename, state.language);
+    const result = await transcribeAudio(blob, filename, state.language, { recording: fromRecording });
     renderer.render(result);
     if (result.text) {
       toast.show('识别完成', 'success', 2500);
@@ -103,6 +106,7 @@ async function recognize(blob, filename) {
       toast.show('未检测到有效语音，请尝试更清晰的音频', 'warn', 5000);
     }
   } catch (error) {
+    if (fromRecording) renderer.keepPreview();
     toast.show(error?.message || '识别失败，请重试', 'error', 6000);
   } finally {
     setBusy(false);
@@ -112,8 +116,50 @@ async function recognize(blob, filename) {
 
 /* ---------------- 录音 ---------------- */
 
+async function transcribePreviewChunk(blob) {
+  const session = preview;
+  if (!session) return;
+  session.chunks.push(blob);
+  if (session.processing) return;
+
+  session.processing = true;
+  const separator = session.language === 'en' ? ' ' : '';
+  while (preview === session && session.chunks.length) {
+    try {
+      const result = await transcribeAudio(
+        session.chunks.shift(), 'preview.wav', session.language,
+        { signal: session.controller.signal, preview: true },
+      );
+      if (preview !== session) return;
+      if (result.text) {
+        session.text = session.text ? session.text + separator + result.text : result.text;
+        renderer.renderPreview(session.text);
+      }
+      if (!session.captureFailed) els.recordTip.textContent = RECORDING_TIP;
+    } catch {
+      if (preview === session) els.recordTip.textContent = PREVIEW_ERROR_TIP;
+    }
+  }
+  session.processing = false;
+}
+
+function stopPreview() {
+  const session = preview;
+  preview = null;
+  if (session) {
+    session.chunks.length = 0;
+    session.controller.abort();
+  }
+}
+
 const recorder = new MicrophoneRecorder({
   maxSeconds: 60,
+  onChunk: transcribePreviewChunk,
+  onPreviewError: () => {
+    if (!preview) return;
+    preview.captureFailed = true;
+    els.recordTip.textContent = PREVIEW_ERROR_TIP;
+  },
   onTick: (elapsed) => {
     els.timer.textContent = formatClock(elapsed);
   },
@@ -121,27 +167,33 @@ const recorder = new MicrophoneRecorder({
     els.levelFill.style.width = `${level}%`;
   },
   onLimit: () => {
+    stopPreview();
     toast.show('录音已达 60 秒上限，已自动停止', 'warn', 5000);
   },
   onError: (error) => {
+    stopPreview();
     setRecordingUI(false);
     els.timer.textContent = formatClock(0);
+    renderer.keepPreview();
     toast.show(error?.message || '录音中断，请检查麦克风后重试', 'error', 6000);
   },
   onStop: (blob, type) => {
+    stopPreview();
     setRecordingUI(false);
     els.timer.textContent = formatClock(0);
     if (!blob || blob.size === 0) {
+      renderer.keepPreview();
       toast.show('没有采集到音频，请重试', 'error');
       return;
     }
-    recognize(blob, `recording.${mimeToExtension(type)}`);
+    recognize(blob, `recording.${mimeToExtension(type)}`, true);
   },
 });
 
 els.recordBtn.addEventListener('click', async () => {
   if (state.busy || state.requestingMicrophone) return;
   if (state.recording) {
+    stopPreview();
     recorder.stop();
     return;
   }
@@ -149,9 +201,15 @@ els.recordBtn.addEventListener('click', async () => {
   updateStatus();
   refreshControls();
   try {
+    preview = {
+      language: state.language, chunks: [], text: '', controller: new AbortController(),
+      processing: false, captureFailed: false,
+    };
     await recorder.start();
+    renderer.clear();
     setRecordingUI(true);
   } catch (error) {
+    stopPreview();
     const messages = {
       NotAllowedError: '麦克风权限被拒绝，请在浏览器地址栏重新授权',
       PermissionDeniedError: '麦克风权限被拒绝，请在浏览器地址栏重新授权',
@@ -171,6 +229,7 @@ els.recordBtn.addEventListener('click', async () => {
 function setSelectedFile(file) {
   const problem = validateFile(file);
   if (problem) {
+    clearSelectedFile();
     toast.show(problem, 'error', 5000);
     return;
   }

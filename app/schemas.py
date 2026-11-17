@@ -12,3 +12,7 @@ class TranscriptionResponse(BaseModel):
 
 class HealthResponse(BaseModel):
     status: str
+    device: str | None = None
+    model: str | None = None
+    gpu_status: str | None = None
+    gpu_error: str | None = None
