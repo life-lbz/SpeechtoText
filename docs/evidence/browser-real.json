@@ -1,0 +1,45 @@
+{
+  "status": "passed",
+  "backend": "real-local-model",
+  "cases": [
+    {
+      "text": "你好，欢迎使用本地语音识别系统。请开始录音，或上传音频。",
+      "language": "zh",
+      "duration_seconds": 8.14,
+      "processing_seconds": 2.62
+    },
+    {
+      "text": "Hello and welcome to the local speech to text system. Please record your voice or upload an audio file.",
+      "language": "en",
+      "duration_seconds": 7.27,
+      "processing_seconds": 2.01
+    },
+    {
+      "text": "你好，欢迎使用本地语音识别系统。请开始录音，或上传音频。你好，欢迎使用。",
+      "language": "zh",
+      "duration_seconds": 9.72,
+      "processing_seconds": 3.12
+    },
+    {
+      "text": "你好，欢迎使用本地语音识别系统。请开始录音，或上传音频。你好，欢...",
+      "language": "zh",
+      "duration_seconds": 9.36,
+      "processing_seconds": 2.66
+    },
+    {
+      "text": "Hello and welcome to the local speech to text system. Please record your voice or upload an audio file. Hello and welcome to the local speech to texts.",
+      "language": "en",
+      "duration_seconds": 9.72,
+      "processing_seconds": 2.31
+    },
+    {
+      "text": "Hello and welcome to the local speech to text system. Please record your voice or upload an audio file. Hello and welcome to the local speech to text system. Please record your voice or upload an audio file. Hello and welcome to the local speech to text system. Please record your voice or upload an audio file. Hello and welcome to the local speech to text system. Please record your voice or upload an audio file. Hello and welcome to the local speech to text system. Please record your voice or upload an audio file. Hello and welcome to the local speech to text system. Please record your voice or upload an audio file. Hello and welcome to the local speech to text system. Please record your voice or upload an audio file. Hello and welcome to the local speech to text system. Please record your voice or upload an audio file. Hello and welcome to the local sp...",
+      "language": "en",
+      "duration_seconds": 60.0,
+      "processing_seconds": 49.12,
+      "case": "record_limit",
+      "stopped_after_seconds": 60.33,
+      "final_requests": 1
+    }
+  ]
+}

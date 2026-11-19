@@ -12,8 +12,6 @@ from tests.helpers import make_wav_bytes
 class FakeTranscriber:
     """测试替身：不加载权重，直接返回固定文本。"""
 
-    acceleration_status = {}
-
     def __init__(self, text="你好，欢迎使用本地语音识别系统。", ready=True):
         self.text = text
         self.ready = ready
@@ -22,8 +20,8 @@ class FakeTranscriber:
     def load(self):
         self.ready = True
 
-    def transcribe(self, audio, language, *, preview=False):
-        self.calls.append((audio, language, preview))
+    def transcribe(self, audio, language, context="", preview=False):
+        self.calls.append((audio, language, context, preview))
         return self.text
 
 

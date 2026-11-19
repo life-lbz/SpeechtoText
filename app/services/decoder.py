@@ -2,7 +2,6 @@
 
 import wave
 from pathlib import Path
-from typing import BinaryIO
 
 import numpy as np
 
@@ -18,41 +17,33 @@ class AudioTooLongError(AudioDecodeError):
 
 
 def decode_audio(
-    source: str | Path | BinaryIO, target_sr: int | None = None, *,
-    max_seconds: float | None = None, suffix: str | None = None,
+    path: str | Path, target_sr: int | None = None, *, max_seconds: float | None = None
 ) -> np.ndarray:
     """解码任意支持的音频文件为 float32 波形（取值范围 -1.0 ~ 1.0）。"""
     target_sr = target_sr or settings.target_sample_rate
-    if isinstance(source, (str, Path)):
-        path = Path(source)
-        suffix = path.suffix
-        source = str(path)
+    path = Path(path)
 
-    if (suffix or "").lower() == ".wav":
+    if path.suffix.lower() == ".wav":
         try:
-            return _decode_wav(source, target_sr, max_seconds)
+            return _decode_wav(path, target_sr, max_seconds)
         except AudioDecodeError:
             raise
         except Exception:
             # 部分 WAV 使用非 PCM 编码，交由 av 兜底
-            if not isinstance(source, str):
-                source.seek(0)
+            pass
 
-    return _decode_with_av(source, target_sr, max_seconds)
+    return _decode_with_av(path, target_sr, max_seconds)
 
 
-def _decode_wav(source: str | BinaryIO, target_sr: int, max_seconds: float | None) -> np.ndarray:
-    with wave.open(source, "rb") as reader:
+def _decode_wav(path: Path, target_sr: int, max_seconds: float | None) -> np.ndarray:
+    with wave.open(str(path), "rb") as reader:
         channels = reader.getnchannels()
         sample_width = reader.getsampwidth()
         frame_rate = reader.getframerate()
         compression = reader.getcomptype()
         if max_seconds is not None and reader.getnframes() > int(frame_rate * max_seconds):
             raise AudioTooLongError
-        frames = bytearray()
-        batch_frames = max(1, 65536 // (channels * sample_width))
-        while block := reader.readframes(batch_frames):
-            frames.extend(block)
+        frames = reader.readframes(reader.getnframes())
 
     if compression != "NONE":
         raise AudioDecodeError("不支持的 WAV 编码")
@@ -78,7 +69,7 @@ def _decode_wav(source: str | BinaryIO, target_sr: int, max_seconds: float | Non
     return _resample(data, frame_rate, target_sr)
 
 
-def _decode_with_av(source: str | BinaryIO, target_sr: int, max_seconds: float | None) -> np.ndarray:
+def _decode_with_av(path: Path, target_sr: int, max_seconds: float | None) -> np.ndarray:
     try:
         import av
     except ImportError as exc:  # pragma: no cover - 依赖缺失时的兜底
@@ -96,7 +87,7 @@ def _decode_with_av(source: str | BinaryIO, target_sr: int, max_seconds: float |
         chunks.append(frame.to_ndarray().reshape(-1))
 
     try:
-        with av.open(source, mode="r") as container:
+        with av.open(str(path)) as container:
             stream = next(
                 (item for item in container.streams if item.type == "audio"), None
             )
@@ -116,8 +107,7 @@ def _decode_with_av(source: str | BinaryIO, target_sr: int, max_seconds: float |
 
     if not chunks:
         raise AudioDecodeError("音频文件为空或已损坏")
-    samples = np.concatenate(chunks).astype(np.float32)
-    samples /= 32768.0
+    samples = np.concatenate(chunks).astype(np.float32) / 32768.0
     return samples
 
 

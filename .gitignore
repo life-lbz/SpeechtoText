@@ -4,11 +4,6 @@ __pycache__/
 .venv/
 venv/
 env/
-*.log
 .DS_Store
-.screenshots/
-产物/
-.trae-html-share-packages/
-/models/*
-!/models/README.md
-!/models/SHA256SUMS.txt
+models/
+outputs/

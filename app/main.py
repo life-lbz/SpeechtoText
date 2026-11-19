@@ -13,6 +13,7 @@ from starlette.formparsers import MultiPartException
 
 from app.api.routes import router
 from app.config import STATIC_DIR, settings
+from app.services.tempfiles import cleanup_stale_files
 from app.services.transcriber import Transcriber
 
 logging.basicConfig(
@@ -22,15 +23,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 TRANSCRIBE_PATH = "/api/transcribe"
-
-
-class NoCacheStaticFiles(StaticFiles):
-    """静态资源禁用强缓存，避免前端更新后浏览器仍使用旧文件。"""
-
-    async def get_response(self, path, scope):
-        response = await super().get_response(path, scope)
-        response.headers["Cache-Control"] = "no-cache, must-revalidate"
-        return response
 
 
 class BodySizeLimitMiddleware:
@@ -92,6 +84,9 @@ def create_app() -> FastAPI:
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         app.state.transcription_slot = Semaphore(1)
+        removed = cleanup_stale_files(settings.temp_max_age_seconds)
+        if removed:
+            logger.info("startup: 清理残留临时音频 %s 个", removed)
         if settings.preload_model:
             try:
                 app.state.transcriber.load()
@@ -121,7 +116,7 @@ def create_app() -> FastAPI:
     app.include_router(router)
 
     if STATIC_DIR.exists():
-        app.mount("/static", NoCacheStaticFiles(directory=STATIC_DIR), name="static")
+        app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
     return app
 

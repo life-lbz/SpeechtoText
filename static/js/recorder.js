@@ -21,6 +21,12 @@ export function mimeToExtension(mimeType = '') {
  * 麦克风录音封装：开始 / 停止 / 计时 / 音量可视化 / 60 秒自动停止。
  */
 export class MicrophoneRecorder {
+  /**
+   * @param {{maxSeconds?: number, onTick?: (seconds: number) => void,
+   * onLevel?: (level: number) => void, onStop?: (blob: Blob, type: string) => void,
+   * onLimit?: () => void, onError?: (error: Error) => void,
+   * onChunk?: (blob: Blob) => void | Promise<void>, onPreviewError?: () => void}} [options]
+   */
   constructor({
     maxSeconds = 60, onTick, onLevel, onStop, onLimit, onError, onChunk, onPreviewError,
   } = {}) {
@@ -92,6 +98,14 @@ export class MicrophoneRecorder {
         this._cleanup();
         this.onError?.(error);
       }
+    }
+  }
+
+  dispose() {
+    const recorder = this.recorder;
+    this._cleanup();
+    if (recorder && recorder.state !== 'inactive') {
+      try { recorder.stop(); } catch { /* 资源和事件已释放。 */ }
     }
   }
 

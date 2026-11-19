@@ -1,2 +1,4 @@
-中文（chinese.wav）：你好，欢迎使用本地语音识别系统。
-英文（english.wav）：Hello and welcome to the local speech to text system.
+中文（chinese.wav）：你好，欢迎使用本地语音识别系统。请开始录音，或上传音频。
+英文（english.wav）：Hello and welcome to the local speech to text system. Please record your voice or upload an audio file.
+
+样本来源：使用 Windows 系统语音自主合成，仅包含上述通用文本，不含敏感个人信息，可随本项目使用和分发。

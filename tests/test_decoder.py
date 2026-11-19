@@ -1,5 +1,3 @@
-from tempfile import SpooledTemporaryFile
-
 import numpy as np
 import pytest
 
@@ -79,7 +77,3 @@ def test_webm_rejects_audio_beyond_limit(tmp_path):
     assert abs(audio_duration(decode_audio(path, max_seconds=2)) - 1.5) < 0.02
     with pytest.raises(AudioTooLongError):
         decode_audio(path, max_seconds=1)
-    with SpooledTemporaryFile(max_size=1) as upload:
-        upload.write(path.read_bytes())
-        upload.seek(0)
-        assert abs(audio_duration(decode_audio(upload, suffix=".webm")) - 1.5) < 0.02

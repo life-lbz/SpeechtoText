@@ -10,8 +10,9 @@ from fastapi.responses import FileResponse
 
 from app.config import INDEX_FILE, settings
 from app.schemas import HealthResponse, TranscriptionResponse
-from app.services.audio_utils import audio_duration
+from app.services.audio_utils import audio_duration, is_digital_silence
 from app.services.decoder import AudioDecodeError, AudioTooLongError, decode_audio
+from app.services.tempfiles import temporary_audio_file
 from app.services.transcriber import ModelNotReadyError, TranscriptionError
 from app.services.validator import AudioValidationError, validate_upload
 
@@ -20,19 +21,18 @@ router = APIRouter()
 
 
 @router.get("/", include_in_schema=False)
+@router.get("/speech", include_in_schema=False)
 def index():
     if not INDEX_FILE.exists():
         raise HTTPException(status_code=404, detail="前端页面缺失，请检查 static/index.html")
-    return FileResponse(
-        INDEX_FILE, headers={"Cache-Control": "no-cache, must-revalidate"}
-    )
+    return FileResponse(INDEX_FILE, headers={"Cache-Control": "no-cache, must-revalidate"})
 
 
-@router.get("/health", response_model=HealthResponse, response_model_exclude_none=True, tags=["system"])
+@router.get("/health", response_model=HealthResponse, tags=["system"])
 def health(request: Request):
     transcriber = request.app.state.transcriber
     if transcriber.ready:
-        return HealthResponse(status="ok", **transcriber.acceleration_status)
+        return HealthResponse(status="ok")
     if request.app.state.model_error:
         return HealthResponse(status="unhealthy")
     return HealthResponse(status="initializing" if settings.preload_model else "standby")
@@ -48,8 +48,9 @@ async def transcribe(
     request: Request,
     file: UploadFile = File(..., description="音频文件，支持 wav/mp3/webm/ogg/m4a/flac"),
     language: str = Form(..., description="识别语言：zh 或 en"),
-    preview: bool = Form(False, description="实时录音片段，使用低延迟解码"),
-    recording: bool = Form(False, description="网页录音，应用录音时长上限"),
+    context: str = Form("", max_length=200, description="可选专业词语提示"),
+    preview: bool = Form(False, description="录音中快速预览"),
+    recording: bool = Form(False, description="网页录音完整终稿，时长上限同普通请求"),
 ):
     started = time.perf_counter()
     trace_id = uuid.uuid4().hex[:8]
@@ -58,17 +59,18 @@ async def transcribe(
     if language not in settings.allowed_languages:
         raise HTTPException(status_code=422, detail="Language must be 'zh' or 'en'")
 
-    size = file.size or 0
+    # 多读 1 字节用于识别超限，避免把超大文件读入内存
+    content = await file.read(settings.max_file_size + 1)
     logger.info(
         "[trace_id=%s] request_received language=%s size=%s file=%s",
         trace_id,
         language,
-        size,
+        len(content),
         file.filename,
     )
 
     try:
-        suffix = validate_upload(file.filename, size)
+        suffix = validate_upload(file.filename, len(content))
     except AudioValidationError as exc:
         logger.warning("[trace_id=%s] 校验失败: %s", trace_id, exc.message)
         raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
@@ -78,18 +80,22 @@ async def transcribe(
         raise HTTPException(status_code=503, detail="语音识别模型不可用，请检查服务日志。")
 
     model_load_seconds = 0.0
-    max_seconds = None
-    if recording or preview:
-        max_seconds = settings.max_duration_seconds + settings.recording_tolerance_seconds
     try:
         async with request.app.state.transcription_slot:
-            audio = await run_in_threadpool(
-                decode_audio,
-                file.file,
-                max_seconds=max_seconds,
-                suffix=suffix,
-            )
-            duration = audio_duration(audio, settings.target_sample_rate)
+            if await request.is_disconnected():
+                raise HTTPException(status_code=499, detail="识别请求已取消。")
+            with temporary_audio_file(content, suffix) as audio_path:
+                audio = await run_in_threadpool(
+                    decode_audio,
+                    audio_path,
+                    max_seconds=settings.max_duration_seconds + settings.recording_tolerance_seconds,
+                )
+                duration = audio_duration(audio, settings.target_sample_rate)
+            if is_digital_silence(audio):
+                return TranscriptionResponse(
+                    text="", language=language, duration_seconds=round(duration, 2),
+                    processing_seconds=round(time.perf_counter() - started, 2),
+                )
             if not transcriber.ready:
                 load_started = time.perf_counter()
                 try:
@@ -98,15 +104,19 @@ async def transcribe(
                     request.app.state.model_error = str(exc)
                     logger.exception("[trace_id=%s] 模型加载失败", trace_id)
                     raise HTTPException(
-                        status_code=503, detail="语音识别模型加载失败，请检查模型目录或缓存后重试。"
+                        status_code=503, detail="语音识别模型加载失败，请检查模型缓存后重试。"
                     ) from exc
                 model_load_seconds = time.perf_counter() - load_started
                 request.app.state.model_error = None
-            text = await run_in_threadpool(transcriber.transcribe, audio, language, preview=preview)
+            if await request.is_disconnected():
+                raise HTTPException(status_code=499, detail="识别请求已取消。")
+            text = await run_in_threadpool(
+                transcriber.transcribe, audio, language, context.strip(), preview
+            )
     except AudioTooLongError as exc:
         raise HTTPException(
             status_code=400,
-            detail=f"录音超过 {settings.max_duration_seconds:g} 秒上限，请分段录制。",
+            detail=f"音频超过 {settings.max_duration_seconds:g} 秒上限，请分段识别。",
         ) from exc
     except AudioDecodeError as exc:
         logger.warning("[trace_id=%s] 解码失败: %s", trace_id, exc)
